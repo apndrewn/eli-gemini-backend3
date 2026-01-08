@@ -1,38 +1,40 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 module.exports = async (req, res) => {
-  // 1. Initial Check
-  if (!process.env.GEMINI_API_KEY) {
-    return res.status(500).json({ error: "GEMINI_API_KEY is not defined in Vercel." });
+  // 1. Safety Check: Ensure req.body exists
+  if (!req.body) {
+    return res.status(400).json({ 
+      error: "Missing request body. Ensure Content-Type is set to application/json." 
+    });
+  }
+
+  const { model, contents, thinking_level } = req.body;
+  
+  if (!contents) {
+    return res.status(400).json({ error: "Missing 'contents' in request body." });
   }
 
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const targetModel = model || "gemini-3-flash-preview";
 
-  // 2. Select Model & API Version (v1beta required for Thinking Configuration)
-  const model = genAI.getGenerativeModel({ 
-    model: req.body.model || "gemini-3-flash-preview" 
+  const geminiModel = genAI.getGenerativeModel({ 
+    model: targetModel 
   }, { apiVersion: 'v1beta' });
 
   try {
-    // 3. Configure Thinking Level (minimal, low, medium, high)
-    const result = await model.generateContent({
-      contents: req.body.contents,
+    const result = await geminiModel.generateContent({
+      contents: contents,
       generationConfig: {
         thinking_config: {
           include_thoughts: true,
-          thinking_level: req.body.thinking_level || "medium"
+          thinking_level: thinking_level || "medium"
         }
       }
     });
 
     const response = await result.response;
     return res.status(200).json(response);
-
   } catch (error) {
-    console.error("Gemini API Error:", error.message);
-    return res.status(500).json({ 
-      error: "AI Generation Failed", 
-      details: error.message 
-    });
+    return res.status(500).json({ error: error.message });
   }
 };
