@@ -2,39 +2,69 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 module.exports = async (req, res) => {
-  // CORS and Headers (Keep outside the try block)
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // 1. MANDATORY CORS HEADERS (Must be set for every request)
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins including Office/Word
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  // --- START THE TRY BLOCK HERE ---
+  // 2. HANDLE PRE-FLIGHT (OPTIONS)
+  // Browsers send this check before the real POST request. 
+  // If not handled, subsequent calls will result in "Failed to fetch".
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // 3. CORE LOGIC WRAPPED IN TRY...CATCH
   try {
-    // 1. Initial validation
-    if (!req.body) throw new Error("Request body is missing.");
+    // Basic Request Validation
+    if (!req.body) {
+      return res.status(400).json({ error: "Missing request body." });
+    }
 
+    const { contents, model: modelId, thinking_level } = req.body;
+
+    if (!contents) {
+      return res.status(400).json({ error: "Missing 'contents' in request body." });
+    }
+
+    // Initialize Gemini Client
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" }, { apiVersion: 'v1beta' });
+    
+    // Use v1beta required for Gemini 3.0 reasoning parameters
+    const targetModel = modelId || "gemini-3-flash-preview";
+    const model = genAI.getGenerativeModel(
+      { model: targetModel }, 
+      { apiVersion: 'v1beta' }
+    );
 
-    // 2. The asynchronous AI call (This is where most 500 errors happen)
+    // 4. CALL GEMINI API
+    // This is the most likely failure point for a 500 error
     const result = await model.generateContent({
-      contents: req.body.contents,
+      contents: contents,
       generationConfig: {
-        thinking_config: { include_thoughts: true, thinking_level: "medium" }
+        thinking_config: {
+          include_thoughts: true,
+          // Fallback logic for reasoning levels
+          thinking_level: thinking_level || (targetModel.includes("pro") ? "high" : "medium")
+        }
       }
     });
 
     const response = await result.response;
     
-    // 3. Send successful response
-    res.status(200).json(response);
+    // Send back the full structured JSON response
+    return res.status(200).json(response);
 
   } catch (error) {
-    // --- START THE CATCH BLOCK HERE ---
-    // This captures any crash from the code above
-    console.error("Vercel Function Crash:", error.message);
+    // 5. ERROR LOGGING & HANDLING
+    // This converts a silent "Function Crash" into a visible error in your ELI logs
+    console.error("Vercel Backend Logic Error:", error.message);
 
-    // Return the actual error message to ELI instead of a generic 500
-    res.status(500).json({ 
-      error: "Serverless Function Error", 
-      details: error.message 
+    return res.status(500).json({ 
+      error: "Serverless Function Crash", 
+      details: error.message,
+      model_attempted: req.body?.model || "unknown"
     });
   }
 };
