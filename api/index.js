@@ -1,10 +1,10 @@
 // api/index.js
 module.exports = async (req, res) => {
-  // 1. MANDATORY CORS HEADERS
+  // 1. MANDATORY CORS HEADERS (Must be set for every request to prevent "Failed to fetch")
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', '*'); 
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
   // 2. HANDLE PRE-FLIGHT (OPTIONS)
   if (req.method === 'OPTIONS') {
@@ -18,10 +18,21 @@ module.exports = async (req, res) => {
 
   const API_KEY = process.env.GEMINI_API_KEY;
   const modelId = req.body.model || "gemini-3-flash-preview";
-  const level = req.body.thinking_level || (modelId.includes("pro") ? "high" : "medium");
+  
+  // 4. 2026 MODEL ROUTING LOGIC
+  const isGemini3 = modelId.includes("gemini-3");
 
   try {
-    // 4. DIRECT FETCH TO GOOGLE API (Bypasses library crashes)
+    // Determine the correct thinking configuration based on the model version
+    const thinkingConfig = isGemini3 ? {
+      include_thoughts: true,
+      thinking_level: req.body.thinking_level || "high" // Gemini 3.0 uses Levels [cite: 5466]
+    } : {
+      include_thoughts: true,
+      thinking_budget: 1024 // Gemini 2.5 uses numeric budgets [cite: 5466]
+    };
+
+    // 5. DIRECT FETCH TO GOOGLE API (Bypasses library crashes [cite: 5157])
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${API_KEY}`;
 
     const response = await fetch(apiUrl, {
@@ -30,10 +41,7 @@ module.exports = async (req, res) => {
       body: JSON.stringify({
         contents: req.body.contents,
         generationConfig: {
-          thinking_config: {
-            include_thoughts: true,
-            thinking_level: level
-          }
+          thinking_config: thinkingConfig
         }
       })
     });
@@ -41,6 +49,7 @@ module.exports = async (req, res) => {
     const data = await response.json();
 
     if (!response.ok) {
+      // Catch specific API errors like "Thinking level not supported"
       throw new Error(data.error?.message || `Google API Error: ${response.status}`);
     }
 
